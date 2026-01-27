@@ -1,6 +1,6 @@
 # 大乐透智能预测系统
 
-[![Version](https://img.shields.io/badge/version-v2.0-blue.svg)](https://github.com/yourusername/daletou)
+[![Version](https://img.shields.io/badge/version-v11.0-blue.svg)](https://github.com/yourusername/daletou)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -10,9 +10,20 @@
 
 ⚠️ **重要声明**：本系统仅供娱乐和学习用途，彩票开奖为随机事件，任何预测结果不构成投注建议。请理性购彩。
 
+**🆕 V11激进优化版**：全面放宽过滤条件，革命性重构评分系统，大幅提升号码覆盖能力和命中率！
+
 ---
 
 ## ✨ 核心特性
+
+### 🆕 V11 激进优化亮点
+
+- ✅ **评分系统革命**：基础分500分（从100提升），历史相似期权重翻倍（150→500）
+- ✅ **过滤条件放宽**：允许四连号（原禁止）、允许蓝球全大全小，前区重号从3放宽到4
+- ✅ **和值全覆盖**：不再偏重85-115中间区，中偏区和偏离区评分大幅提升
+- ✅ **特征增强**：新增跨度、大小比、邻号分析等多维度特征
+- ✅ **连号策略调整**：三连号从惩罚改为加分，一二连号大幅加分
+- ✅ **质数丰富度**：每个质数加200分（原仅100分）
 
 ### 🎯 技术亮点
 
