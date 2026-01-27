@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大乐透智能预测系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎯 大乐透智能预测系统</h1>
+            <p class="subtitle">基于多维度统计分析与机器学习</p>
+            <div class="disclaimer">
+                ⚠️ 免责声明：本系统仅供娱乐和学习用途，彩票开奖为随机事件，预测结果不构成任何投注建议
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- 历史数据区 -->
+            <section class="card history-section">
+                <h2>📜 历史开奖数据</h2>
+                <div class="model-status" id="modelStatus" style="padding: 10px; margin-bottom: 15px; border-radius: 5px; background: #f0f0f0;">
+                    <span style="color: #666;">⚙️ 模型状态：</span>
+                    <span id="modelStatusText" style="font-weight: bold; color: #e67e22;">未训练</span>
+                    <button id="trainModelBtn" class="btn btn-success" onclick="trainModel()" style="margin-left: 15px;">
+                        <span class="btn-icon">🚀</span> 训练所有模型
+                    </button>
+                    <span id="trainProgress" style="margin-left: 15px; color: #3498db; display: none;"></span>
+                </div>
+                <div id="historyData" class="history-container"></div>
+            </section>
+
+            <!-- 回测验证区 -->
+            <section class="card validate-section">
+                <h2>🎯 回测验证</h2>
+                <p class="validate-desc">输入历史期号范围，系统将生成每期的预测号码并与实际开奖号码对比</p>
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>起始期号：</label>
+                        <input type="text" id="startPeriod" placeholder="例如：25080" value="25140">
+                    </div>
+                    <div class="input-group">
+                        <label>结束期号：</label>
+                        <input type="text" id="endPeriod" placeholder="例如：25150" value="25150">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="validateModel()">
+                    <span class="btn-icon">🔍</span> 开始回测
+                </button>
+                <button id="stopValidateBtn" class="btn btn-danger" onclick="stopTask('validate')" style="margin-left: 10px; display: none; background-color: #e74c3c;">
+                    <span class="btn-icon">⏹️</span> 停止操作
+                </button>
+                <div id="validateLoading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>正在回测中，请稍候...</p>
+                </div>
+                <div id="validateResults" class="validate-results"></div>
+            </section>
+
+            <!-- 组合导出与预测区 -->
+            <section class="card export-section">
+                <h2>📥 号码组合导出与预测</h2>
+                <p class="export-desc">
+                    从大乐透全部2143万组组合中排除以下模式：<br>
+                    1️⃣ 历史开奖号码 | 2️⃣ 四连号(4个或以上连续) | 3️⃣ 等差等比数列<br>
+                    4️⃣ 全奇/全偶号码 | 5️⃣ 同区号码(1-11, 12-23, 24-35)<br>
+                    <strong>系统将根据这些过滤条件进行号码导出或智能预测</strong>
+                </p>
+                
+                <div class="kill-number-section">
+                    <h3>设置目标期号与过滤条件</h3>
+                    <div class="input-group">
+                        <label for="exportPeriod">🎯 目标期号 (下一期)：</label>
+                        <input type="text" id="exportPeriod" readonly style="background-color: #f0f0f0; cursor: not-allowed; font-weight: bold; color: #2c3e50;" value="加载中...">
+                        <span style="margin-left: 10px; color: #e67e22; font-size: 13px;">(系统已自动锁定最新未开奖期次)</span>
+                    </div>
+                    <div class="input-group">
+                        <label>杀红球：</label>
+                        <input type="text" id="exportKillRed" placeholder="例如：01,10,15 (用逗号分隔，排除包含这些号码的组合)">
+                    </div>
+                    <div class="input-group">
+                        <label>杀蓝球：</label>
+                        <input type="text" id="exportKillBlue" placeholder="例如：05,12 (用逗号分隔，排除包含这些号码的组合)">
+                    </div>
+                    <div class="input-group">
+                        <label>和值范围：</label>
+                        <input type="number" id="exportSumMin" placeholder="最小值（例如0）" min="15" max="175" style="width: 150px;">
+                        <span style="margin: 0 10px;">~</span>
+                        <input type="number" id="exportSumMax" placeholder="最大值（例如150）" min="15" max="175" style="width: 150px;">
+                        <span style="margin-left: 10px; color: #666; font-size: 14px;">（前区5个号码的和值，范围：15-175）</span>
+                    </div>
+                    <div class="input-group">
+                        <label>奇偶比：</label>
+                        <select id="exportOddEvenRatio" style="width: 150px; padding: 8px; border: 1px solid #ddd; border-radius: 5px;">
+                            <option value="">不限制</option>
+                            <option value="5:0">5:0 (全奇)</option>
+                            <option value="4:1">4:1 (4奇1偶)</option>
+                            <option value="3:2">3:2 (3奇2偶)</option>
+                            <option value="2:3">2:3 (2奇3偶)</option>
+                            <option value="1:4">1:4 (1奇4偶)</option>
+                            <option value="0:5">0:5 (全偶)</option>
+                        </select>
+                        <span style="margin-left: 10px; color: #666; font-size: 14px;">（前区5个号码的奇偶比例）</span>
+                    </div>
+                    <!-- 新增参考网页地址 -->
+                    <div class="input-group" style="margin-top: 15px;">
+                        <label>参考网页地址 (可选)：</label>
+                        <textarea id="referenceUrls" placeholder="输入公众号、头条等预测文章链接，每行一个。系统将参考文中提到的热门号码。" style="width: 100%; min-height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit; resize: vertical;"></textarea>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <button class="btn btn-primary" onclick="predict()">
+                        <span class="btn-icon">🔮</span> 开始预测
+                    </button>
+                    <button class="btn btn-warning" onclick="exportCombinations()" style="margin-left: 10px;">
+                        <span class="btn-icon">📊</span> 开始导出（需要较长时间）
+                    </button>
+                    <button class="btn btn-info" onclick="queryCombination()" style="margin-left: 10px;">
+                        <span class="btn-icon">🔍</span> 查询组合
+                    </button>
+                    <button id="stopPredictBtn" class="btn btn-danger" onclick="stopTask('predict')" style="margin-left: 10px; display: none; background-color: #e74c3c;">
+                        <span class="btn-icon">⏹️</span> 停止操作
+                    </button>
+                </div>
+
+                <!-- 预测结果显示区 -->
+                <div id="resultsSection" style="display: none; margin-top: 25px; border-top: 2px solid #eee; padding-top: 20px;">
+                    <h2 style="color: #2c3e50;">✨ 智能预测结果</h2>
+                    <p style="color: #666; font-size: 14px; margin-bottom: 15px;">以下号码是在满足上述所有过滤条件的基础上，由预测引擎计算得出的高评分组合</p>
+                    <div class="result-info">
+                        <span id="resultPeriod"></span>
+                        <span id="resultCount"></span>
+                    </div>
+                    <div id="predictions" class="predictions-container"></div>
+                    <div class="model-info" id="modelInfo"></div>
+                </div>
+                
+                <div class="query-section" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <h3 style="margin-top: 0;">查询号码组合</h3>
+                    <p style="color: #666; font-size: 14px;">输入一组号码，查询该组合是否在过滤后的列表中（不会执行导出）</p>
+                    <div class="input-group">
+                        <label>前区号码：</label>
+                        <input type="text" id="queryRedNumbers" placeholder="输入5个号码，例如：01,05,12,23,35">
+                    </div>
+                    <div class="input-group">
+                        <label>后区号码：</label>
+                        <input type="text" id="queryBlueNumbers" placeholder="输入2个号码，例如：03,08">
+                    </div>
+                </div>
+                <div id="loading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>正在计算中，请稍候...</p>
+                </div>
+                <div id="exportLoading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>正在生成和过滤组合，请耐心等待...</p>
+                </div>
+                <div id="queryLoading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>正在查询中...</p>
+                </div>
+                <div id="exportResults" class="export-results"></div>
+                <div id="queryResults" class="query-results" style="margin-top: 15px;"></div>
+            </section>
+        </div>
+
+        <footer>
+            <p>© 2026 大乐透智能预测系统 | 仅供娱乐参考 | 理性购彩</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
