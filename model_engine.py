@@ -1374,14 +1374,23 @@ class DaletouPredictor:
         print(f"[*] 可用红球: {len(avail_red)}个, 可用蓝球: {len(avail_blue)}个", flush=True)
         
         # 预计算模型概率（用于评分）
+        print(f"[*] 开始特征提取...", flush=True)
         last_feat_df = self.extract_features(self.history_df, last_only=True)
+        print(f"[*] 特征提取完成", flush=True)
+        
+        print(f"[*] 开始ML模型预测...", flush=True)
         red_probas = self._predict_with_stacking(last_feat_df, target_type='red') if self.stacking_meta_model else {}
+        print(f"[*] 红球预测完成", flush=True)
         blue_probas = self._predict_with_stacking(last_feat_df, target_type='blue') if self.blue_stacking_meta_model else {}
+        print(f"[*] 蓝球Stacking预测完成", flush=True)
         lstm_probas = self._predict_blue_with_lstm() if self.blue_lstm_model else {}
+        print(f"[*] 蓝球LSTM预测完成", flush=True)
         
         # 预计算历史相似期次
+        print(f"[*] 开始查找相似期次...", flush=True)
         last_row_feats = last_feat_df.iloc[-1].to_dict()
         global_similar_periods = self._find_similar_periods(last_row_feats, top_k=8)
+        print(f"[*] 相似期次查找完成（找到{len(global_similar_periods)}期）", flush=True)
         
         # ====== V12性能优化：快速过滤 + 缓存预计算 ======
         # 原则：不改变遍历逻辑，保证不遗漏任何组合
@@ -1573,6 +1582,7 @@ class DaletouPredictor:
                                               red_probas=red_probas,
                                               blue_probas=blue_probas,
                                               lstm_probas=lstm_probas,
+                                              similar_periods_override=global_similar_periods,
                                               ref_numbers=ref_numbers)
             
             item = {
@@ -1593,7 +1603,6 @@ class DaletouPredictor:
             print(f"[*] V12优化：使用快速过滤+缓存，保证全量遍历", flush=True)
             
             # 生成所有8+3组合
-            from itertools import combinations
             all_red_8 = list(combinations(avail_red, 8))
             all_blue_3 = list(combinations(avail_blue, 3))
             
@@ -1791,6 +1800,7 @@ class DaletouPredictor:
                                                       red_probas=red_probas,
                                                       blue_probas=blue_probas,
                                                       lstm_probas=lstm_probas,
+                                                      similar_periods_override=global_similar_periods,
                                                       ref_numbers=ref_numbers)
                     
                     item = {
