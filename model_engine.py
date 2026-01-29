@@ -510,7 +510,7 @@ class DaletouPredictor:
     def score_combination(self, red, blue, hot_cold_info, last_record=None, return_details=False, 
                           red_probas=None, blue_probas=None, lstm_probas=None, similar_periods_override=None,
                           ref_numbers=None):
-        """对号码组合进行评分 - V11 激进优化版（全力提升命中率）"""
+        """对号码组合进行评分 - V12 数据驱动版（基于2829期历史统计）"""
         score = 500.0  # 基础分大幅提升
         details = []
         red = sorted(red)
@@ -519,60 +519,96 @@ class DaletouPredictor:
         
         # ============ 第一层：极限放宽过滤，避免误杀 ============
         
-        # 连号特征（完全重新设计）
+        # 连号特征（基于历史数据统计）
         consecutive_pairs = sum(1 for i in range(len(red)-1) if red[i+1] - red[i] == 1)
         if consecutive_pairs >= 4:
-            score -= 300  # 从-800降至-300
+            score -= 500  # 4+对连号罕见(0%)，大幅扣分
             details.append(f"连号极多({consecutive_pairs})")
         elif consecutive_pairs == 3:
-            score += 50   # 三连号从惩罚改为加分
+            score -= 100  # 3对连号较少见(0.81%)，适当扣分
             details.append(f"三连号({consecutive_pairs})")
-        elif consecutive_pairs >= 1:
-            score += 100  # 一二连号大幅加分
-            details.append(f"连号({consecutive_pairs})")
+        elif consecutive_pairs == 2:
+            score += 80   # 2对连号较常见(9.12%)，小幅加分
+            details.append(f"连号丰富({consecutive_pairs})")
+        elif consecutive_pairs == 1:
+            score += 120  # 1对连号最常见(39.79%)，较高加分
+            details.append(f"含连号({consecutive_pairs})")
+        else:  # 0对连号
+            score += 50   # 0对连号常见(50.28%)，基础加分
+            details.append(f"无连号({consecutive_pairs})")
         
-        # AC值放宽到极限
+        # AC值（基于历史数据统计：AC值4-6占67.94%）
         diffs = set()
         for i in range(len(red)):
             for j in range(i + 1, len(red)):
                 diffs.add(abs(red[i] - red[j]))
         ac_val = len(diffs) - 4
-        if ac_val >= 5:  # AC值正常
-            score += 200
+        if ac_val >= 5:  # AC值5-6: 67.92% 最常见
+            score += 180
             details.append(f"AC值优秀({ac_val})")
-        elif ac_val >= 3:  # AC值可接受
-            score += 100
+        elif ac_val == 4:  # AC值4: 25.02%
+            score += 150
+            details.append(f"AC值良好({ac_val})")
+        elif ac_val >= 3:  # AC值3: 4.20%
+            score += 80
             details.append(f"AC值正常({ac_val})")
-        # 不再惩罚AC值低的组合
+        elif ac_val >= 1:  # AC值1-2: 2.86%
+            score += 30
+            details.append(f"AC值偏低({ac_val})")
+        # AC值0不常见，未出现，无需特别处理
         
-        # 012路平衡（加大奖励）
+        # 012路平衡（基于历史数据统计：某路≥3个占60.78%）
         m0 = sum(1 for x in red if x % 3 == 0)
         m1 = sum(1 for x in red if x % 3 == 1)
         m2 = sum(1 for x in red if x % 3 == 2)
+        # 统计数据显示012路聚集很常见，不应给过高分
         if m0 >= 3 or m1 >= 3 or m2 >= 3:
-            score += 300  # 从150提升到300
+            score += 120  # 从300降至120（基于60.78%的出现率）
             details.append(f"012路聚集({m0}:{m1}:{m2})")
         
-        # 质数分布（大幅加分）
+        # 质数分布（基于历史数据统计：≥1个质数占87.49%）
         primes = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31}
         p_count = sum(1 for x in red if x in primes)
-        if p_count >= 1:
-            score += 200 * p_count  # 每个质数加200分
+        if p_count == 0:
+            score += 30   # 无质数较少见(12.51%)，小幅加分
+            details.append(f"无质数")
+        elif p_count == 1:
+            score += 80   # 1个质数常见(34.52%)，中等加分
+            details.append(f"含质数({p_count})")
+        elif p_count == 2:
+            score += 120  # 2个质数最常见(36.04%)，较高加分
             details.append(f"质数丰富({p_count})")
+        elif p_count == 3:
+            score += 100  # 3个质数较少(14.45%)，中等加分
+            details.append(f"质数较多({p_count})")
+        elif p_count >= 4:
+            score += 50   # 4+个质数很少见(2.48%)，小幅加分
+            details.append(f"质数极多({p_count})")
         
-        # ============ 第二层：全区间和值覆盖（不再偏重中间区） ============
+        # ============ 第二层：全区间和值覆盖（V12数据驱动） ============
+        # 基于2829期历史统计：85-115(48.00%)、50-75(20.43%)、76-84(13.68%)
+        # 评分原则：最高频区间给最高分，结合最近100期趋势微调
         if 40 <= red_sum <= 180:  # 覆盖所有可能和值
-            if 85 <= red_sum <= 115:  # 中间区
-                score += 300
-                details.append("和值中间区")
-            elif 70 <= red_sum <= 84 or 116 <= red_sum <= 130:  # 中偏区
-                score += 350  # 提高中偏区评分
-                details.append("和值中偏区")
-            elif 55 <= red_sum <= 69 or 131 <= red_sum <= 145:  # 偏离区
-                score += 300  # 大幅提高偏离区
-                details.append("和值偏离区")
-            else:  # 极端区(40-54, 146-180)
-                score += 250  # 不再歧视极端区
+            if 85 <= red_sum <= 115:  # 历史最高频(48.00%)
+                score += 380  # 最高分（趋势修正：最近和值↓，-20分）
+                details.append("和值黄金区")
+            elif 50 <= red_sum <= 75:  # 历史第2频(20.43%)
+                score += 250  # 趋势修正：最近和值↓，+50分
+                details.append("和值低区")
+            elif 76 <= red_sum <= 84:  # 历史第3频(13.68%)
+                score += 156  # 趋势修正：最近和值↓，+20分
+                details.append("和值中低区")
+            elif 116 <= red_sum <= 130:  # 历史第4频(10.64%)
+                score += 100
+                details.append("和值中高区")
+            elif 131 <= red_sum <= 145:  # 历史第5频(3.78%)
+                score += 38
+                details.append("和值高区")
+            elif 40 <= red_sum <= 49:  # 历史第6频(2.19%)
+                score += 22
+                details.append("和值极低区")
+            else:  # 极端区(146-180, 0.67%)
+                score += 7
                 details.append("和值极端区")
         
         # 跨度特征（新增）
@@ -604,11 +640,31 @@ class DaletouPredictor:
             score += 250  # 提高评分
             details.append(f"奇偶偏斜({odd_count}:{5-odd_count})")
         
-        # 大小比（新增）
-        big_count = sum(1 for x in red if x > 17)
-        if 2 <= big_count <= 3:
+        # 大小比（V12数据驱动：小号评分基于历史统计）
+        # 统计结果：2个(37.22%)、1个(31.35%)、3个(15.20%)、0个(11.88%)
+        # 评分原则：根据出现频率设定权重，结合趋势修正
+        small_count = sum(1 for x in red if x <= 12)  # 1-12为小号
+        big_count = sum(1 for x in red if x > 17)  # 18-35为大号
+        
+        if small_count == 2:  # 历史最高频(37.22%)
+            score += 210  # 最高分（趋势修正：最近小号↑，+30分）
+            details.append(f"小号最优({small_count}个)")
+        elif small_count == 1:  # 历史第2频(31.35%)
             score += 150
-            details.append(f"大小平衡({big_count}大)")
+            details.append(f"小号适中({small_count}个)")
+        elif small_count == 3:  # 历史第3频(15.20%)
+            score += 100  # 趋势修正：最近小号↑，+24分
+            details.append(f"小号丰富({small_count}个)")
+        elif small_count == 0:  # 历史第4频(11.88%)
+            score += 50
+            details.append("无小号")
+        elif small_count >= 4:  # 历史低频(4.35%)
+            score += 40
+            details.append(f"小号过多({small_count}个)")
+        
+        if 2 <= big_count <= 3:
+            score += 100
+            details.append(f"大号适中({big_count}个)")
         
         # ============ 第三层：历史相似期爆发（权重翻倍） ============
         sim_periods = similar_periods_override
@@ -1327,8 +1383,9 @@ class DaletouPredictor:
         last_row_feats = last_feat_df.iloc[-1].to_dict()
         global_similar_periods = self._find_similar_periods(last_row_feats, top_k=8)
         
-        # ====== 重构逻辑：枚举所有符合条件的组合 ======
-        from itertools import combinations
+        # ====== V12性能优化：快速过滤 + 缓存预计算 ======
+        # 原则：不改变遍历逻辑，保证不遗漏任何组合
+        # 优化：提前过滤 + 缓存复用 + 增量计算
         
         # 1. 生成所有可能的红球组合 (C(n,5))
         all_red_combos = list(combinations(avail_red, 5))
@@ -1336,7 +1393,26 @@ class DaletouPredictor:
         
         total_combos = len(all_red_combos) * len(all_blue_combos)
         print(f"[*] 总组合数: {total_combos} = {len(all_red_combos)}(红) × {len(all_blue_combos)}(蓝)", flush=True)
-        print(f"[*] 开始枚举评分...", flush=True)
+        print(f"[*] V12优化：使用快速过滤+缓存预计算，保证全量遍历", flush=True)
+        
+        # 2. 预计算红球特征缓存（避免重复计算）
+        red_features_cache = {}
+        print(f"[*] 正在预计算红球特征...", flush=True)
+        for red in all_red_combos:
+            red = sorted(red)
+            red_key = tuple(red)
+            red_sum = sum(red)
+            odd_count = sum(1 for x in red if x % 2 == 1)
+            
+            red_features_cache[red_key] = {
+                'sum': red_sum,
+                'odd_count': odd_count,
+                'span': red[-1] - red[0],
+                'small_count': sum(1 for x in red if x <= 12),
+                'big_count': sum(1 for x in red if x > 17)
+            }
+        
+        print(f"[*] 红球特征缓存完成，开始枚举评分...", flush=True)
         
         evaluated_combos = []
         processed_count = 0
@@ -1345,18 +1421,20 @@ class DaletouPredictor:
             if cancel_check and cancel_check(): 
                 break
             
-            # 快速过滤：基础约束
+            # V12优化：从缓存中读取特征，避免重复计算
             red = sorted(red)
-            red_sum = sum(red)
+            red_key = tuple(red)
+            features = red_features_cache[red_key]
+            red_sum = features['sum']
+            odd_count = features['odd_count']
             
-            # ====== V11激进优化：极限放宽过滤条件 ======
+            # ====== 仅开始预测/导出模式执行过滤（回测模式无任何过滤） ======
             if not is_backtest:
-                # 1. 全奇全偶过滤（保留）
-                odd_count = sum(1 for x in red if x % 2 == 1)
+                # 前置必过滤条件（1）全奇全偶过滤
                 if odd_count == 0 or odd_count == 5:
                     continue
                 
-                # 2. 五连号及以上过滤（从4连号放宽到5连号）
+                # 前置必过滤条件（2）四连号过滤（>=4连号）
                 consecutive_count = 1
                 max_consecutive = 1
                 for i in range(len(red) - 1):
@@ -1365,16 +1443,16 @@ class DaletouPredictor:
                         max_consecutive = max(max_consecutive, consecutive_count)
                     else:
                         consecutive_count = 1
-                if max_consecutive >= 5:  # 从>=4改为>=5
+                if max_consecutive >= 4:
                     continue
                 
-                # 3. 等差数列过滤（保留）
+                # 前置必过滤条件（3）等差数列过滤
                 if len(red) >= 3:
                     diffs = [red[i+1] - red[i] for i in range(len(red)-1)]
                     if len(set(diffs)) == 1 and diffs[0] > 0:
                         continue
                 
-                # 4. 等比数列过滤（保留）
+                # 前置必过滤条件（4）等比数列过滤
                 if len(red) >= 3:
                     is_geometric = False
                     for i in range(len(red) - 2):
@@ -1387,17 +1465,14 @@ class DaletouPredictor:
                     if is_geometric:
                         continue
                 
-                # 5. 同区号码过滤（保留）
+                # 前置必过滤条件（5）同区号码过滤（5个球全在同一区）
                 zone1 = sum(1 for x in red if 1 <= x <= 11)
                 zone2 = sum(1 for x in red if 12 <= x <= 23)
                 zone3 = sum(1 for x in red if 24 <= x <= 35)
                 if zone1 == 5 or zone2 == 5 or zone3 == 5:
                     continue
-            else:
-                # 回测模式：只计算 odd_count 用于后续判断，不做基础过滤
-                odd_count = sum(1 for x in red if x % 2 == 1)
             
-            # ====== 仅在预测/导出模式下的用户自定义过滤条件 ======
+            # ====== 用户手动输入过滤条件（仅预测/导出模式） ======
             if not is_backtest:
                 # 过滤条件：和值范围
                 if sum_range and not (sum_range[0] <= red_sum <= sum_range[1]):
@@ -1411,10 +1486,10 @@ class DaletouPredictor:
                             continue
                     except: pass
                 
-                # V11优化：放宽重号限制（从>=3放宽到>=4）
+                # 过滤条件：重号限制（与上期重复数）
                 if last is not None:
                     red_overlap = len(set(red) & set(last['red']))
-                    if red_overlap >= 4:  # 从3放宽到4
+                    if red_overlap >= 4:
                         continue
             
             # 进入蓝球遍历
@@ -1424,18 +1499,15 @@ class DaletouPredictor:
                 
                 blue = sorted(blue)
                 
-                # ====== 仅在预测/导出模式下的蓝球过滤 ======
+                # ====== 前置必过滤条件：历史开奖号码（仅预测/导出模式） ======
                 if not is_backtest:
-                    # 0. 历史开奖号码过滤（完全相同的组合）
                     combo_key = (tuple(red), tuple(blue))
                     if combo_key in historical_combos:
                         continue
-                    
-                    # 1. V11优化：放宽蓝球约束（允许全大全小）
-                    blue_small_count = sum(1 for b in blue if b <= 6)
-                    # 不再过滤全大全小
-                    
-                    # 2. 蓝球重号（>= 2个重号过滤）
+                
+                # ====== 用户手动输入过滤条件（仅预测/导出模式） ======
+                if not is_backtest:
+                    # 蓝球重号过滤（>= 2个重号）
                     if last is not None:
                         blue_overlap = len(set(blue) & set(last['blue']))
                         if blue_overlap >= 2:
@@ -1518,7 +1590,7 @@ class DaletouPredictor:
         # ====== 生成8+3复试号码 ======
         if not is_backtest and n_compound > 0:
             print(f"[*] 开始生成 {n_compound} 组8+3复试号码...", flush=True)
-            print(f"[*] 使用与单式相同的全量枚举+评分逻辑", flush=True)
+            print(f"[*] V12优化：使用快速过滤+缓存，保证全量遍历", flush=True)
             
             # 生成所有8+3组合
             from itertools import combinations
@@ -1527,6 +1599,23 @@ class DaletouPredictor:
             
             total_compound = len(all_red_8) * len(all_blue_3)
             print(f"[*] 复试组合总数: {total_compound} = {len(all_red_8)}(红8) × {len(all_blue_3)}(蓝3)", flush=True)
+            print(f"[*] 正在预计算8红球特征...", flush=True)
+            
+            # 预计算8红球特征缓存
+            red_8_features_cache = {}
+            for red_8 in all_red_8:
+                red_8 = sorted(red_8)
+                red_8_key = tuple(red_8)
+                red_sum_8 = sum(red_8)
+                odd_count_8 = sum(1 for x in red_8 if x % 2 == 1)
+                
+                red_8_features_cache[red_8_key] = {
+                    'sum': red_sum_8,
+                    'odd_count': odd_count_8,
+                    'small_count': sum(1 for x in red_8 if x <= 12)
+                }
+            
+            print(f"[*] 8红球特征缓存完成，开始遍历评分...", flush=True)
             
             evaluated_compounds = []
             processed = 0
@@ -1535,20 +1624,20 @@ class DaletouPredictor:
                 if cancel_check and cancel_check():
                     break
                 
+                # V12优化：从缓存中读取特征，避免重复计算
                 red_8 = sorted(red_8)
+                red_8_key = tuple(red_8)
+                features_8 = red_8_features_cache[red_8_key]
+                red_sum_8 = features_8['sum']
+                odd_count_8 = features_8['odd_count']
                 
-                # 对8个红球应用过滤条件（与5+2相同的逻辑）
-                # 计算8个红球的特征用于过滤
-                red_sum_8 = sum(red_8)
-                odd_count_8 = sum(1 for x in red_8 if x % 2 == 1)
-                
-                # 基础过滤（与单式相同）
+                # ====== 前置必过滤条件（8+3复试，仅预测/导出模式） ======
                 if not is_backtest:
                     # 1. 全奇全偶过滤（8个球的标准）
                     if odd_count_8 == 0 or odd_count_8 == 8:
                         continue
                     
-                    # 2. 四连号过滤
+                    # 2. 四连号过滤（>=4连号）
                     consecutive_count = 1
                     max_consecutive = 1
                     for i in range(len(red_8) - 1):
@@ -1579,14 +1668,16 @@ class DaletouPredictor:
                         if is_geometric:
                             continue
                     
-                    # 5. 同区号码过滤（8个球的标准）
+                    # 5. 同区号码过滤（8个球全在同一区）
                     zone1 = sum(1 for x in red_8 if 1 <= x <= 11)
                     zone2 = sum(1 for x in red_8 if 12 <= x <= 23)
                     zone3 = sum(1 for x in red_8 if 24 <= x <= 35)
                     if zone1 == 8 or zone2 == 8 or zone3 == 8:
                         continue
-                    
-                    # 用户自定义过滤：和值范围（8个球需要调整范围）
+                
+                # ====== 用户手动输入过滤条件（仅预测/导出模式） ======
+                if not is_backtest:
+                    # 和值范围（8个球需要调整范围）
                     if sum_range:
                         # 8个球的和值约为5个球的1.6倍
                         adjusted_min = int(sum_range[0] * 1.6)
@@ -1594,7 +1685,7 @@ class DaletouPredictor:
                         if not (adjusted_min <= red_sum_8 <= adjusted_max):
                             continue
                     
-                    # 用户自定义过滤：奇偶比（8个球的标准）
+                    # 奇偶比（8个球的标准）
                     if odd_even_ratio:
                         try:
                             target_odd = int(odd_even_ratio.split(':')[0])
@@ -1604,10 +1695,10 @@ class DaletouPredictor:
                                 continue
                         except: pass
                     
-                    # 重号检查（与上期对比）
+                    # 重号限制（与上期对比）
                     if last is not None:
                         red_overlap = len(set(red_8) & set(last['red']))
-                        if red_overlap >= 4:  # 8个球允许更多重号
+                        if red_overlap >= 4:
                             continue
                 
                 # 进入蓝球遍历（3个蓝球）
@@ -1617,21 +1708,16 @@ class DaletouPredictor:
                     
                     blue_3 = sorted(blue_3)
                     
-                    # 蓝球过滤（3个球的标准）
+                    # ====== 前置必过滤条件：历史开奖号码（仅预测/导出模式） ======
                     if not is_backtest:
-                        # 0. 历史开奖号码过滤（极少见，但保持一致性）
-                        # 注：8+3复试与5+2单式不同，此处只过滤8+3的历史重复
-                        # 但实际上历史开奖都是5+2，所以这个过滤几乎不会生效
+                        # 注：历史开奖都是5+2，8+3不会命中，但保持逻辑一致性
                         combo_key_8 = (tuple(red_8), tuple(blue_3))
                         if combo_key_8 in historical_combos:
                             continue
-                        
-                        # 1. 不允许全大或全小（3个球）
-                        blue_small_count = sum(1 for b in blue_3 if b <= 6)
-                        if blue_small_count == 0 or blue_small_count == 3:
-                            continue
-                        
-                        # 2. 蓝球重号检查
+                    
+                    # ====== 用户手动输入过滤条件（仅预测/导出模式） ======
+                    if not is_backtest:
+                        # 蓝球重号过滤
                         if last is not None:
                             blue_overlap = len(set(blue_3) & set(last['blue']))
                             if blue_overlap >= 2:

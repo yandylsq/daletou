@@ -123,6 +123,7 @@ async function predict() {
     const sumMaxInput = document.getElementById('exportSumMax').value.trim();
     const oddEvenRatio = document.getElementById('exportOddEvenRatio').value.trim();
     const referenceUrls = document.getElementById('referenceUrls').value.trim();
+    const includeCompound = document.getElementById('includeCompound').checked; // 新增：获取复试选项
     
     if (!period) { alert('请输入期号'); return; }
     
@@ -151,7 +152,8 @@ async function predict() {
         await streamFetch(`${API_BASE}/api/predict`, {
             task_id: taskId, period: period, kill_red: killRed, kill_blue: killBlue,
             sum_min: sumMin, sum_max: sumMax, odd_even_ratio: oddEvenRatio,
-            reference_urls: referenceUrls ? referenceUrls.split('\n').map(u => u.trim()).filter(u => u) : []
+            reference_urls: referenceUrls ? referenceUrls.split('\n').map(u => u.trim()).filter(u => u) : [],
+            include_compound: includeCompound // 新增：传递复试选项
         }, (data) => {
             if (data.type === 'start') {
                 actualData = data.actual_data;

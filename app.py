@@ -134,10 +134,11 @@ def predict():
     sum_max = data.get('sum_max')
     odd_even_ratio = data.get('odd_even_ratio')
     reference_urls = data.get('reference_urls', [])
+    include_compound = data.get('include_compound', False)  # 新增：是否计算8+3复试
 
     def generate():
         try:
-            print(f"[DEBUG] 预测任务开始 - task_id: {task_id}, period: {period}", flush=True)
+            print(f"[DEBUG] 预测任务开始 - task_id: {task_id}, period: {period}, include_compound: {include_compound}", flush=True)
             
             if not predictor.is_trained:
                 print(f"[ERROR] 模型未训练", flush=True)
@@ -161,11 +162,15 @@ def predict():
             yield f"data: {json.dumps({'type': 'start', 'period': period, 'actual_data': actual_data})}\n\n"
 
             # 2. 调用预测引擎 (Generator 模式)
-            print(f"[DEBUG] 开始调用 predictor.predict", flush=True)
+            # 根据用户选择决定 n_compound 参数
+            n_compound = 10 if include_compound else 0
+            
+            print(f"[DEBUG] 开始调用 predictor.predict, n_compound={n_compound}", flush=True)
             pred_count = 0
             for pred in predictor.predict(
                 period=period, kill_red=kill_red, kill_blue=kill_blue,
-                n_combinations=20, sum_range=sum_range,
+                n_combinations=20, n_compound=n_compound,
+                sum_range=sum_range,
                 odd_even_ratio=odd_even_ratio, reference_urls=reference_urls,
                 cancel_check=lambda: is_task_cancelled(task_id)
             ):
