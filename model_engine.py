@@ -7,6 +7,13 @@ import os
 import joblib
 import requests
 from bs4 import BeautifulSoup
+from dynamic_scoring_rules import (
+    get_dynamic_sum_score,
+    get_dynamic_zone_score,
+    get_dynamic_odd_score,
+    get_dynamic_size_score,
+    get_2d_combined_bonus
+)
 from itertools import combinations
 import warnings
 warnings.filterwarnings('ignore')
@@ -585,31 +592,22 @@ class DaletouPredictor:
             score += 50   # 4+个质数很少见(2.48%)，小幅加分
             details.append(f"质数极多({p_count})")
         
-        # ============ 第二层：全区间和值覆盖（V12数据驱动） ============
-        # 基于2829期历史统计：85-115(48.00%)、50-75(20.43%)、76-84(13.68%)
-        # 评分原则：最高频区间给最高分，结合最近100期趋势微调
-        if 40 <= red_sum <= 180:  # 覆盖所有可能和值
-            if 85 <= red_sum <= 115:  # 历史最高频(48.00%)
-                score += 380  # 最高分（趋势修正：最近和值↓，-20分）
-                details.append("和值黄金区")
-            elif 50 <= red_sum <= 75:  # 历史第2频(20.43%)
-                score += 250  # 趋势修正：最近和值↓，+50分
-                details.append("和值低区")
-            elif 76 <= red_sum <= 84:  # 历史第3频(13.68%)
-                score += 156  # 趋势修正：最近和值↓，+20分
-                details.append("和值中低区")
-            elif 116 <= red_sum <= 130:  # 历史第4频(10.64%)
-                score += 100
-                details.append("和值中高区")
-            elif 131 <= red_sum <= 145:  # 历史第5频(3.78%)
-                score += 38
-                details.append("和值高区")
-            elif 40 <= red_sum <= 49:  # 历史第6频(2.19%)
-                score += 22
-                details.append("和值极低区")
-            else:  # 极端区(146-180, 0.67%)
-                score += 7
-                details.append("和值极端区")
+        # ============ 第二层：动态和值评分（V12.3 - 综合规律） ============
+        # 综合考虑：
+        # 1. 和值回归中心趋势（极端值后倾向于回归90-110）
+        # 2. 连续趋势反转规律（连续上升/下降3期同76%概率反转）
+        # 3. 基本转移概率
+        last_red_sum = sum(last_record['red']) if last_record else None
+        
+        # 获取上上期和值（用于趋势判断）
+        prev2_red_sum = None
+        if last_record and len(hc) >= 2:
+            prev2_record = hc[-2]
+            prev2_red_sum = sum(prev2_record['red'])
+        
+        sum_score, sum_reason = get_dynamic_sum_score(red_sum, last_red_sum, prev2_red_sum)
+        score += sum_score
+        details.append(sum_reason)
         
         # 跨度特征（新增）
         span = red[-1] - red[0]
@@ -620,53 +618,138 @@ class DaletouPredictor:
             score += 150  # 极端跨度也给分
             details.append(f"跨度特殊({span})")
         
-        # 区间分布（不再惩罚不均衡）
+        # 区间分布（V12.3动态评分 - 基于上期区间比动态调整）
         z1 = sum(1 for x in red if x <= 11)
         z2 = sum(1 for x in red if 12 <= x <= 23)
         z3 = sum(1 for x in red if x >= 24)
-        if z1 >= 1 and z2 >= 1 and z3 >= 1:  # 三区都有
-            score += 200
-            details.append(f"三区覆盖({z1}-{z2}-{z3})")
-        elif (z1 >= 2 and z2 >= 2) or (z2 >= 2 and z3 >= 2) or (z1 >= 2 and z3 >= 2):
-            score += 250  # 两区强势也加分
-            details.append(f"双区强势({z1}-{z2}-{z3})")
+        zone_ratio = f"{z1}:{z2}:{z3}"
         
-        # 奇偶比（全面覆盖）
+        # 上期区间比
+        last_zone_ratio = None
+        if last_record is not None:
+            last_z1 = sum(1 for x in last_record['red'] if x <= 11)
+            last_z2 = sum(1 for x in last_record['red'] if 12 <= x <= 23)
+            last_z3 = sum(1 for x in last_record['red'] if x >= 24)
+            last_zone_ratio = f"{last_z1}:{last_z2}:{last_z3}"
+        
+        # 动态评分：根据上期区间比预测下期最可能的区间比
+        zone_score, zone_reason = get_dynamic_zone_score(zone_ratio, last_zone_ratio)
+        score += zone_score
+        details.append(zone_reason)
+        
+        # 奇偶比（V12.3动态评分 - 综合规律）
+        # 综合考虑：1.极端值回归 2.自转移惯性（36.8%、30.1%） 3.连续保持 4.基本转移
         odd_count = sum(1 for x in red if x % 2 == 1)
-        if odd_count in [2, 3]:  # 最常见
-            score += 200
-            details.append(f"奇偶均衡({odd_count}:{ 5-odd_count})")
-        elif odd_count in [1, 4]:  # 次常见
-            score += 250  # 提高评分
-            details.append(f"奇偶偏斜({odd_count}:{5-odd_count})")
+        odd_ratio = f"{odd_count}:{5-odd_count}"
         
-        # 大小比（V12数据驱动：小号评分基于历史统计）
-        # 统计结果：2个(37.22%)、1个(31.35%)、3个(15.20%)、0个(11.88%)
-        # 评分原则：根据出现频率设定权重，结合趋势修正
-        small_count = sum(1 for x in red if x <= 12)  # 1-12为小号
+        # 上期奇偶比
+        last_odd_ratio = None
+        prev2_odd_ratio = None
+        if last_record is not None:
+            last_odd_count = sum(1 for x in last_record['red'] if x % 2 == 1)
+            last_odd_ratio = f"{last_odd_count}:{5-last_odd_count}"
+            
+            # 上上期奇偶比
+            if len(hc) >= 2:
+                prev2_record = hc[-2]
+                prev2_odd_count = sum(1 for x in prev2_record['red'] if x % 2 == 1)
+                prev2_odd_ratio = f"{prev2_odd_count}:{5-prev2_odd_count}"
+        
+        # 动态评分：根据上期奇偶比预测下期最可能的奇偶比
+        odd_score, odd_reason = get_dynamic_odd_score(odd_ratio, last_odd_ratio, prev2_odd_ratio)
+        score += odd_score
+        details.append(odd_reason)
+        
+        # 大小比（V12.3动态评分 - 综合规律）
+        # 综合考虑：1.极端值回归 2.自转移惯性（34.7%、29.3%） 3.连续保持 4.基本转移
+        small_count = sum(1 for x in red if x <= 12)  # 1-12为小号（注意：这里是小号数量，不是大小比）
         big_count = sum(1 for x in red if x > 17)  # 18-35为大号
         
-        if small_count == 2:  # 历史最高频(37.22%)
-            score += 210  # 最高分（趋势修正：最近小号↑，+30分）
+        # 计算大小比（1-17小，18-35大）
+        size_small = sum(1 for x in red if x <= 17)
+        size_big = 5 - size_small
+        size_ratio = f"{size_small}:{size_big}"
+        
+        # 上期大小比
+        last_size_ratio = None
+        prev2_size_ratio = None
+        if last_record is not None:
+            last_size_small = sum(1 for x in last_record['red'] if x <= 17)
+            last_size_big = 5 - last_size_small
+            last_size_ratio = f"{last_size_small}:{last_size_big}"
+            
+            # 上上期大小比
+            if len(hc) >= 2:
+                prev2_record = hc[-2]
+                prev2_size_small = sum(1 for x in prev2_record['red'] if x <= 17)
+                prev2_size_big = 5 - prev2_size_small
+                prev2_size_ratio = f"{prev2_size_small}:{prev2_size_big}"
+        
+        # 动态评分：根据上期大小比预测下期最可能的大小比
+        size_score, size_reason = get_dynamic_size_score(size_ratio, last_size_ratio, prev2_size_ratio)
+        score += size_score
+        details.append(size_reason)
+        
+        # ============ V12.4 新增：2维组合加成 ============
+        # 如果当前组合符合历史统计的高概率转移模式（概率>=15%），给予额外加分
+        if last_record is not None:
+            # 获取和值区间
+            def get_sum_range_label(s):
+                if s < 70:
+                    return '<70'
+                elif s < 90:
+                    return '70-90'
+                elif s < 110:
+                    return '90-110'
+                elif s < 130:
+                    return '110-130'
+                else:
+                    return '130+'
+            
+            curr_features = {
+                'sum_range': get_sum_range_label(red_sum),
+                'zone_ratio': zone_ratio,
+                'odd_ratio': odd_ratio,
+                'size_ratio': size_ratio
+            }
+            
+            last_sum = sum(last_record['red'])
+            last_features = {
+                'sum_range': get_sum_range_label(last_sum),
+                'zone_ratio': last_zone_ratio,
+                'odd_ratio': last_odd_ratio,
+                'size_ratio': last_size_ratio
+            }
+            
+            combo_bonus, combo_reasons = get_2d_combined_bonus(curr_features, last_features)
+            if combo_bonus > 0:
+                score += combo_bonus
+                details.extend(combo_reasons)
+        
+        # 小号数量评分（保留原有逻辑）
+        if small_count == 2:  # 历史最高频(37.20%)
+            score += 220  # 最高分
             details.append(f"小号最优({small_count}个)")
-        elif small_count == 1:  # 历史第2频(31.35%)
-            score += 150
+        elif small_count == 1:  # 历史第2频(31.33%)
+            score += 185  # 从150提升，反映高频特征
             details.append(f"小号适中({small_count}个)")
-        elif small_count == 3:  # 历史第3频(15.20%)
-            score += 100  # 趋势修正：最近小号↑，+24分
+        elif small_count == 3:  # 历史第3频(15.26%)
+            score += 120  # 从100提升，给予合理权重
             details.append(f"小号丰富({small_count}个)")
-        elif small_count == 0:  # 历史第4频(11.88%)
-            score += 50
+        elif small_count == 0:  # 历史第4频(11.87%)
+            score += 60  # 从50提升
             details.append("无小号")
-        elif small_count >= 4:  # 历史低频(4.35%)
-            score += 40
+        elif small_count >= 4:  # 历史低频(4.13%)
+            score += 30  # 从40降低，低频特征降权
             details.append(f"小号过多({small_count}个)")
         
         if 2 <= big_count <= 3:
             score += 100
             details.append(f"大号适中({big_count}个)")
         
-        # ============ 第三层：历史相似期爆发（权重翻倍） ============
+        # ============ 第三层：历史相似期验证（基于2831期数据大幅降权） ============
+        # 统计结果：0个重叠(44.13%)、1个重叠(41.84%)、2个重叠(12.74%)、≥3个(1.30%)
+        # 结论：历史相似期预测价值有限，500分/个权重严重过高，大幅降权
         sim_periods = similar_periods_override
         if not sim_periods and return_details:
             current_feats = {
@@ -681,11 +764,13 @@ class DaletouPredictor:
                 next_data = self._get_next_period_numbers(sp['period'])
                 if next_data:
                     overlap = len(set(red) & set(next_data['red']))
-                    if overlap >= 1:  # 任何重叠都加分
-                        score += overlap * 500  # 从150提升到500！
-                        if return_details: details.append(f"历史相似爆发(+{overlap})")
+                    if overlap >= 2:  # 仅2个及以上重叠才加分（12.74%+1.30%=14.04%）
+                        score += overlap * 120  # 从500大幅降至120，避免过度拟合
+                        if return_details: details.append(f"历史相似参考(+{overlap})")
         
-        # 邻号分析（新增）
+        # 邻号分析（基于2831期历史数据优化）
+        # 统计结果：1个(40.14%)、2个(29.79%)、0个(19.89%)、3个(9.01%)
+        # 评分原则：1-2个邻号为常态，给予合理权重
         if last_record is not None:
             last_red = set(last_record['red'])
             last_blue = set(last_record['blue'])
@@ -696,9 +781,15 @@ class DaletouPredictor:
                 if (r-1 in last_red) or (r+1 in last_red):
                     neighbor_count += 1
             
-            if neighbor_count >= 2:
-                score += neighbor_count * 150
+            if neighbor_count == 1:  # 历史最高频(40.14%)
+                score += 180  # 最高频特征给予最高分
+                details.append(f"邻号标准({neighbor_count}个)")
+            elif neighbor_count == 2:  # 历史第2频(29.79%)
+                score += 280  # 2个邻号权重提升（140/个）
                 details.append(f"邻号丰富({neighbor_count}个)")
+            elif neighbor_count >= 3:  # 历史低频(9.01%+0.95%+0.21%=10.17%)
+                score += neighbor_count * 100  # 降权，避免过度拟合
+                details.append(f"邻号过多({neighbor_count}个)")
             
             # 重号策略调整
             red_overlap = len(set(red) & last_red)
